@@ -341,7 +341,8 @@ lflow_group_ecmp_route_change_handler(struct engine_node *node,
         lflow_ref_unlink_lflows(route_node->lflow_ref);
         build_route_data_flows_for_lrouter(
             route_node->od, lflow_data->lflow_table,
-            route_node, lflow_input.bfd_ports);
+            route_node, lflow_input.bfd_ports, lflow_input.features,
+            lflow_input.lr_stateful_table);
 
         bool handled = lflow_ref_sync_lflows(
             route_node->lflow_ref, lflow_data->lflow_table,

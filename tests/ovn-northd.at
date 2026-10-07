@@ -19950,6 +19950,97 @@ OVN_CLEANUP_NORTHD
 AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Static routes - ECMP liveness ports for distributed gateway ports])
+ovn_start
+
+check ovn-sbctl chassis-add gw1 geneve 127.0.0.1 \
+  -- set chassis gw1 other_config:select-liveness-port=true
+check ovn-sbctl chassis-add gw2 geneve 127.0.0.2 \
+  -- set chassis gw2 other_config:select-liveness-port=true
+
+check ovn-nbctl                                                          \
+    -- ls-add ls0                                                        \
+        -- lsp-add ls0 vm1                                               \
+        -- lsp-set-addresses vm1 "00:00:00:00:00:10 10.0.0.10"           \
+        -- lsp-add-router-port ls0 ls0-lr0 lr0-ls0                       \
+    -- lr-add lr0                                                        \
+        -- lrp-add lr0 lr0-ls0 00:00:00:00:00:01 10.0.0.1/24             \
+        -- lrp-add lr0 lr0-pub1 00:00:00:00:01:01 172.16.1.1/24          \
+        -- lrp-set-gateway-chassis lr0-pub1 gw1                          \
+        -- lrp-add lr0 lr0-pub2 00:00:00:00:02:01 172.16.2.1/24          \
+        -- lrp-set-gateway-chassis lr0-pub2 gw2                          \
+        -- --ecmp lr-route-add lr0 0.0.0.0/0 172.16.1.254                \
+        -- --ecmp lr-route-add lr0 0.0.0.0/0 172.16.2.254                \
+        -- --ecmp lr-route-add lr0 0.0.0.0/0 10.0.0.254
+
+check ovn-nbctl --wait=sb sync
+
+# Prints the members of the select() of the ECMP group, the member ids
+# replaced by ID, because their order is not fixed.
+ecmp_members() {
+    ovn-sbctl lflow-list lr0 | grep 'lr_in_ip_routing ' \
+        | sed -n 's/.*select(\([[^)]]*\)).*/\1/p' | tr -d ' ' | tr ',' '\n' \
+        | sed 's/[[0-9]][[0-9]]*$/ID/' | sort
+}
+
+AT_CHECK([as northd ovn-appctl -t ovn-northd debug/chassis-features-list | grep select_liveness_port], [0], [dnl
+select_liveness_port: true
+])
+
+# The members through a distributed gateway port depend on the chassis of
+# its chassisredirect port, the member through lr0-ls0 does not.
+AS_BOX([Liveness ports])
+AT_CHECK([ecmp_members], [0], [dnl
+"cr-lr0-pub1":ID
+"cr-lr0-pub2":ID
+ID
+])
+
+AS_BOX([A chassis without support])
+check ovn-sbctl set chassis gw2 other_config:select-liveness-port=false
+check ovn-nbctl --wait=sb sync
+AT_CHECK([ecmp_members], [0], [dnl
+ID
+ID
+ID
+])
+
+check ovn-sbctl set chassis gw2 other_config:select-liveness-port=true
+check ovn-nbctl --wait=sb sync
+
+# Packets of distributed NAT entries are not redirected to the gateway
+# chassis, so the router stops using liveness ports.  The route flows follow
+# the NAT entries without a recompute.
+AS_BOX([Distributed NAT])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb --gateway-port=lr0-pub1 lr-nat-add lr0 \
+    dnat_and_snat 172.16.1.10 10.0.0.10 vm1 00:00:00:00:01:10
+check_engine_stats lflow norecompute compute
+AT_CHECK([ecmp_members], [0], [dnl
+ID
+ID
+ID
+])
+
+# With only a centralized NAT entry left, liveness ports are used again.
+check ovn-nbctl --wait=sb --gateway-port=lr0-pub2 lr-nat-add lr0 \
+    snat 172.16.2.10 10.0.0.0/24
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lr-nat-del lr0 dnat_and_snat 172.16.1.10
+check_engine_stats lflow norecompute compute
+AT_CHECK([ecmp_members], [0], [dnl
+"cr-lr0-pub1":ID
+"cr-lr0-pub2":ID
+ID
+])
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([Static routes - ECMP with discard])
 ovn_start
 

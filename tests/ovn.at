@@ -12619,6 +12619,190 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([ECMP routes through distributed gateway ports - nexthop liveness])
+AT_KEYWORDS([ecmp bfd])
+ovn_start
+
+net_add n1
+
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+check ovs-vsctl -- add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=foo1
+
+for i in 1 2 3; do
+    sim_add gw$i
+    as gw$i
+    check ovs-vsctl add-br br-phys
+    ovn_attach n1 br-phys 192.168.0.$((i + 1))
+    check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+done
+
+check ovn-nbctl ls-add foo
+check ovn-nbctl lsp-add foo foo1 \
+    -- lsp-set-addresses foo1 "f0:00:00:01:02:03 192.168.1.2"
+
+check ovn-nbctl lr-add R1
+check ovn-nbctl lrp-add R1 R1-foo 00:00:01:01:02:03 192.168.1.1/24
+check ovn-nbctl lsp-add-router-port foo foo-R1 R1-foo
+
+# pub1 is on gw1 and pub2 on gw2, both can fail over to gw3.  OVN runs BFD
+# on the tunnels only for HA chassis groups with at least two chassis.
+check ovn-nbctl lrp-add R1 pub1 00:00:02:01:02:03 172.16.1.1/24
+check ovn-nbctl lrp-set-gateway-chassis pub1 gw1 20
+check ovn-nbctl lrp-set-gateway-chassis pub1 gw3 10
+check ovn-nbctl lrp-add R1 pub2 00:00:03:01:02:03 172.16.2.1/24
+check ovn-nbctl lrp-set-gateway-chassis pub2 gw2 20
+check ovn-nbctl lrp-set-gateway-chassis pub2 gw3 10
+
+for i in 1 2; do
+    check ovn-nbctl ls-add pub$i-ls
+    check ovn-nbctl lsp-add-router-port pub$i-ls pub$i-ls-R1 pub$i
+    check ovn-nbctl lsp-add-localnet-port pub$i-ls ln-pub$i phys
+done
+
+check ovn-nbctl --ecmp lr-route-add R1 0.0.0.0/0 172.16.1.254
+check ovn-nbctl --ecmp lr-route-add R1 0.0.0.0/0 172.16.2.254
+
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
+AT_CHECK([ovn-sbctl lflow-list R1 | grep 'select' | grep '"cr-pub1":' | grep -c '"cr-pub2":'], [0], [1
+])
+
+# hv1 references the HA chassis groups of pub1 and pub2, so it runs BFD to
+# the gateway chassis.
+for gw in gw1 gw2 gw3; do
+    OVS_WAIT_UNTIL([test "$(as hv1 ovs-vsctl get interface ovn-$gw-0 bfd_status:state)" = up])
+done
+check ovn-nbctl --wait=hv sync
+
+hv1_gw1_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-gw1-0)
+hv1_gw2_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-gw2-0)
+hv1_gw3_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-gw3-0)
+
+# Prints the number of ECMP buckets on hv1 that watch the tunnel with
+# OpenFlow port $1.
+watching_buckets() {
+    as hv1 ovs-ofctl --no-names dump-groups br-int | grep 'selection_method' \
+        | grep -o "watch_port:$1," | wc -l
+}
+
+# Prints the tunnels watched by the ECMP buckets that hv1 selects for packets
+# from foo1 to the Internet, for a range of dp_hash values.
+trace_gw_tunnels() {
+    groups=$(as hv1 ovs-ofctl --no-names dump-groups br-int | grep selection_method)
+    for h in $(seq 1 64); do
+        bucket=$(as hv1 ovs-appctl ofproto/trace br-int \
+            "in_port=hv1-vif1,dl_src=f0:00:00:01:02:03,dl_dst=00:00:01:01:02:03,ip,nw_src=192.168.1.2,nw_dst=8.8.8.8,nw_ttl=64,dp_hash=$h" \
+            | sed -n 's/.*-> using bucket \([[0-9]]*\).*/\1/p')
+        test -n "$bucket" || continue
+        port=$(echo "$groups" \
+            | sed -n "s/.*bucket=bucket_id:$bucket,weight:100,watch_port:\([[0-9]]*\),.*/\1/p")
+        as hv1 ovs-vsctl --bare --columns name find Interface ofport=$port
+    done | sort -u
+}
+
+AS_BOX([Both nexthops are used, each bucket watches its gateway tunnel])
+OVS_WAIT_UNTIL([test $(watching_buckets $hv1_gw1_ofport) = 1])
+AT_CHECK([test $(watching_buckets $hv1_gw2_ofport) = 1])
+AT_CHECK([test $(watching_buckets $hv1_gw3_ofport) = 0])
+AT_CHECK([trace_gw_tunnels], [0], [dnl
+ovn-gw1-0
+ovn-gw2-0
+])
+
+AS_BOX([The tunnel to gw1 does not forward, gw2 gets all the flows])
+# This only changes the liveness of the tunnel port on hv1.  The BFD state
+# stays up, so the gateway port does not fail over.
+AT_CHECK([as hv1 ovs-appctl bfd/set-forwarding ovn-gw1-0 false], [0], [OK
+])
+AT_CHECK([trace_gw_tunnels], [0], [dnl
+ovn-gw2-0
+])
+
+AT_CHECK([as hv1 ovs-appctl bfd/set-forwarding ovn-gw1-0 normal], [0], [OK
+])
+AT_CHECK([trace_gw_tunnels], [0], [dnl
+ovn-gw1-0
+ovn-gw2-0
+])
+
+AS_BOX([pub1 fails over to gw3, its bucket watches the tunnel to gw3])
+lflow_recomputes() {
+    as hv1 ovn-appctl -t ovn-controller inc-engine/show-stats lflow_output \
+        | sed -n 's/.*recompute: *\([[0-9]]*\).*/\1/p'
+}
+recomputes=$(lflow_recomputes)
+check ovn-nbctl --wait=hv lrp-set-gateway-chassis pub1 gw3 30
+wait_row_count Port_Binding 1 logical_port=cr-pub1 \
+    chassis=$(fetch_column Chassis _uuid name=gw3)
+OVS_WAIT_UNTIL([test $(watching_buckets $hv1_gw3_ofport) = 1])
+AT_CHECK([test $(watching_buckets $hv1_gw1_ofport) = 0])
+AT_CHECK([test $(watching_buckets $hv1_gw2_ofport) = 1])
+AT_CHECK([test "$(lflow_recomputes)" = "$recomputes"])
+
+# gw1 does not hold any gateway port anymore.
+AT_CHECK([as hv1 ovs-appctl bfd/set-forwarding ovn-gw1-0 false], [0], [OK
+])
+AT_CHECK([trace_gw_tunnels], [0], [dnl
+ovn-gw2-0
+ovn-gw3-0
+])
+AT_CHECK([as hv1 ovs-appctl bfd/set-forwarding ovn-gw1-0 normal], [0], [OK
+])
+
+AS_BOX([pub2 is bound to no chassis, the other flows stay where they are])
+# A third member, through a port that is not a gateway port, so that more
+# than one member remains.
+check ovn-nbctl --wait=hv --ecmp lr-route-add R1 0.0.0.0/0 192.168.1.254
+OVS_WAIT_UNTIL([test $(as hv1 ovs-ofctl dump-groups br-int \
+                       | grep selection_method | grep -o bucket_id: \
+                       | wc -l) = 3])
+
+# Prints the dp_hash values and the bucket that hv1 selects for each.
+trace_buckets() {
+    for h in $(seq 1 64); do
+        echo "$h $(as hv1 ovs-appctl ofproto/trace br-int \
+            "in_port=hv1-vif1,dl_src=f0:00:00:01:02:03,dl_dst=00:00:01:01:02:03,ip,nw_src=192.168.1.2,nw_dst=8.8.8.8,nw_ttl=64,dp_hash=$h" \
+            | sed -n 's/.*-> using bucket \([[0-9]]*\).*/\1/p')"
+    done
+}
+pub2_bucket=$(as hv1 ovs-ofctl dump-groups br-int | grep selection_method \
+    | grep -o "bucket_id:[[0-9]]*,weight:100,watch_port:$hv1_gw2_ofport," \
+    | sed 's/bucket_id:\([[0-9]]*\),.*/\1/')
+before=$(trace_buckets)
+AT_CHECK([echo "$before" | grep -q " $pub2_bucket$"])
+
+check ovn-nbctl lrp-del-gateway-chassis pub2 gw2 \
+    -- lrp-del-gateway-chassis pub2 gw3 \
+    -- lrp-set-gateway-chassis pub2 gw9 10
+check ovn-nbctl --wait=hv sync
+wait_column "" Port_Binding chassis logical_port=cr-pub2
+
+# The bucket of pub2 stays in the group and watches a fast failover group
+# without buckets, so it is never selected.
+OVS_WAIT_UNTIL([as hv1 ovs-ofctl dump-groups br-int | grep selection_method \
+                | grep -q "bucket_id:$pub2_bucket,weight:100,watch_group:"])
+AT_CHECK([as hv1 ovs-ofctl dump-groups br-int | grep -c "type=ff$"], [0], [1
+])
+after=$(trace_buckets)
+AT_CHECK([echo "$after" | grep -c " $pub2_bucket$"], [1], [0
+])
+
+# Only the flows of pub2 moved.
+AT_CHECK([echo "$before" | while read h b; do
+              test "$b" = "$pub2_bucket" && continue
+              echo "$after" | grep -q "^$h $b$" || echo "$h moved from $b"
+          done])
+
+OVN_CLEANUP([hv1],[gw1],[gw2],[gw3])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([4 HV, 3 LS, 2 LR, packet test with HA distributed router gateway port])
 ovn_start
 

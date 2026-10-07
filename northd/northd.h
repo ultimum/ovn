@@ -949,7 +949,9 @@ void lflow_reset_northd_refs(struct lflow_input *);
 void build_route_data_flows_for_lrouter(
     const struct ovn_datapath *od, struct lflow_table *lflows,
     const struct group_ecmp_datapath *route_node,
-    const struct sset *bfd_ports);
+    const struct sset *bfd_ports,
+    const struct chassis_features *features,
+    const struct lr_stateful_table *lr_stateful_table);
 
 bool lflow_handle_northd_lr_changes(struct ovsdb_idl_txn *ovnsh_txn,
                                      struct tracked_dps *,

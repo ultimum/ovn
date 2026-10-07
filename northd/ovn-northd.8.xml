@@ -4944,6 +4944,18 @@ reg8[0..15] = <var>GID</var>;
 reg8[16..31] = select(<var>MID1</var>, <var>MID2</var>, ...);
         </pre>
         <p>
+          If the next hop of a member is reached through a distributed
+          gateway port, the member is written as
+          <code>"<var>CR</var>":<var>MID</var></code>, where <var>CR</var>
+          is the chassisredirect port of the gateway port.  The member is then
+          only selected while the chassis that <var>CR</var> is bound to is
+          reachable through its tunnel, see <code>select</code> in
+          <code>ovn-sb</code>(5).  This is done only if all chassis support
+          it (feature <code>select-liveness-port</code>) and if the router
+          has no distributed NAT entries, whose packets are not redirected to
+          the gateway chassis.
+        </p>
+        <p>
           However, when there is only one route in an ECMP group, group actions
           will be:
         </p>
