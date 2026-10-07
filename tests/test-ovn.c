@@ -285,6 +285,23 @@ lookup_tunnel_ofport(const void *ports_, const char *port_name,
     return true;
 }
 
+/* "LOCAL" is bound to this chassis, the other known ports are bound to a
+ * remote chassis whose tunnel has the port's number as OpenFlow port, and
+ * unknown ports are bound to no chassis. */
+static bool
+lookup_port_tunnel_cb(const void *ports_, const char *port_name,
+                      ofp_port_t *ofport)
+{
+    const struct simap *ports = ports_;
+    const struct simap_node *node = simap_find(ports, port_name);
+    if (!node) {
+        return false;
+    }
+    *ofport = !strcmp(port_name, "LOCAL")
+              ? OFPP_NONE : u16_to_ofp(node->data);
+    return true;
+}
+
 static bool
 is_chassis_resident_cb(const void *ports_, const char *port_name)
 {
@@ -1370,6 +1387,7 @@ test_parse_actions(struct ovs_cmdl_context *ctx OVS_UNUSED)
                 .lookup_port = lookup_port_cb,
                 .lookup_local_port = lookup_local_port_cb,
                 .tunnel_ofport = lookup_tunnel_ofport,
+                .lookup_port_tunnel = lookup_port_tunnel_cb,
                 .aux = &ports,
                 .is_switch = true,
                 .group_table = &group_table,

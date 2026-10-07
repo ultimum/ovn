@@ -2565,12 +2565,13 @@ tcp.flags = RST;
           </p>
         </dd>
 
-        <dt><code><var>R</var> = select(<var>N1</var>[=<var>W1</var>], <var>N2</var>[=<var>W2</var>], ...);</code></dt>
-        <dt><code><var>R</var> = select(values=(<var>N1</var>[=<var>W1</var>], <var>N2</var>[=<var>W2</var>], ...); hash_fields="<var>field1</var>,<var>field2</var>,...");</code></dt>
+        <dt><code><var>R</var> = select([<var>P1</var>:]<var>N1</var>[=<var>W1</var>], [<var>P2</var>:]<var>N2</var>[=<var>W2</var>], ...);</code></dt>
+        <dt><code><var>R</var> = select(values=([<var>P1</var>:]<var>N1</var>[=<var>W1</var>], [<var>P2</var>:]<var>N2</var>[=<var>W2</var>], ...); hash_fields="<var>field1</var>,<var>field2</var>,...");</code></dt>
         <dd>
           <p>
             <b>Parameters</b>: Integer <var>N1</var>, <var>N2</var>..., with
-            optional weight <var>W1</var>, <var>W2</var>, ...
+            optional weight <var>W1</var>, <var>W2</var>, ... and optional
+            logical port names <var>P1</var>, <var>P2</var>, ...
           </p>
 
           <p>
@@ -2595,6 +2596,26 @@ tcp.flags = RST;
           </p>
 
           <p>
+            If an integer is prefixed by a quoted logical port name
+            <var>P</var> and a colon, it is only selected while the chassis
+            that <var>P</var> is bound to is reachable from the chassis that
+            processes the packet.  If <var>P</var> is bound to another chassis,
+            <code>ovn-controller</code> makes the OpenFlow bucket of the
+            integer watch the tunnel to that chassis, and Open vSwitch does not
+            select the bucket while BFD is enabled on the tunnel and is not up.
+            The packets that would select it then select one of the other
+            integers, and the packets that select other integers are not
+            affected.  If <var>P</var> is bound to no chassis, the integer is
+            never selected: its bucket watches a fast failover group without
+            buckets, which is never alive, so that the packets that select
+            other integers are not affected either.  If <var>P</var> is bound
+            to the local chassis, or
+            if there is no tunnel to watch, the integer is selected as if it
+            had no prefix.  This is meant for members whose packets are
+            redirected to the chassis of a <code>chassisredirect</code> port.
+          </p>
+
+          <p>
             Processing automatically moves on to the next table, as if
             <code>next;</code> were specified.  The <code>select</code> action
             must be put as the last action of the logical flow when there are
@@ -2605,6 +2626,7 @@ tcp.flags = RST;
           <p>
             <b>Example:</b> <code>reg8[16..31] = select(1=20, 2=30, 3=50);</code>
             <b>Example:</b> <code>reg8[16..31] = select(values=(1=20, 2=30, 3=50); hash_fields="ip_proto,src_ip,dst_ip");</code>
+            <b>Example:</b> <code>reg8[16..31] = select("cr-lrp1":1, "cr-lrp2":2);</code>
           </p>
         </dd>
 
