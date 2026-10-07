@@ -12543,11 +12543,34 @@ add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
     ds_destroy(&ecmp_reply);
 }
 
+/* Returns true if the select() members of the ECMP routes of 'od' get the
+ * chassisredirect port of their distributed gateway port as liveness port,
+ * see build_ecmp_route_flow().
+ *
+ * Packets routed through a distributed gateway port are redirected to the
+ * chassis of its chassisredirect port, except the packets of distributed NAT
+ * entries, which leave from the chassis of their logical port.  Those must
+ * not stop using a member when only the gateway chassis is unreachable, so
+ * routers with distributed NAT entries do not use liveness ports. */
+static bool
+ecmp_route_use_liveness_ports(const struct ovn_datapath *od,
+                              const struct chassis_features *features,
+                              const struct lr_stateful_table *lr_sful_table)
+{
+    if (!features->select_liveness_port) {
+        return false;
+    }
+
+    const struct lr_stateful_record *lr_sful_rec =
+        lr_stateful_table_find_by_uuid(lr_sful_table, od->key);
+    return !lr_sful_rec || !lr_sful_rec->lrnat_rec->has_distributed_nat;
+}
+
 static void
 build_ecmp_route_flow(struct lflow_table *lflows,
                       const struct ovn_datapath *od,
                       struct ecmp_groups_node *eg, struct lflow_ref *lflow_ref,
-                      const char *protocol)
+                      const char *protocol, bool use_liveness_ports)
 
 {
     bool is_ipv4_prefix = IN6_IS_ADDR_V4MAPPED(&eg->prefix);
@@ -12579,6 +12602,17 @@ build_ecmp_route_flow(struct lflow_table *lflows,
                 is_first = false;
             } else {
                 ds_put_cstr(&values, ", ");
+            }
+
+            /* Packets of a member that leaves through a distributed gateway
+             * port are redirected to the chassis of the gateway port's
+             * chassisredirect port.  Make the member depend on that chassis
+             * being reachable, so that a chassis that cannot reach it, e.g.
+             * because it is down, uses the other members instead. */
+            const struct ovn_port *out_port = er->route->out_port;
+            if (use_liveness_ports && !eg->has_discard_route
+                && out_port && lrp_is_l3dgw(out_port)) {
+                ds_put_format(&values, "%s:", out_port->cr_port->json_key);
             }
             ds_put_format(&values, "%"PRIu16, er->id);
         }
@@ -14842,24 +14876,34 @@ void
 build_route_data_flows_for_lrouter(
         const struct ovn_datapath *od, struct lflow_table *lflows,
         const struct group_ecmp_datapath *route_node,
-        const struct sset *bfd_ports)
+        const struct sset *bfd_ports,
+        const struct chassis_features *features,
+        const struct lr_stateful_table *lr_stateful_table)
 {
+    bool use_liveness_ports =
+        !hmap_is_empty(&route_node->ecmp_groups)
+        && ecmp_route_use_liveness_ports(od, features, lr_stateful_table);
+
     struct ecmp_groups_node *group;
     HMAP_FOR_EACH (group, hmap_node, &route_node->ecmp_groups) {
         /* add a flow in IP_ROUTING, and one flow for each member in
          * IP_ROUTING_ECMP. */
-        build_ecmp_route_flow(lflows, od, group, route_node->lflow_ref, NULL);
+        build_ecmp_route_flow(lflows, od, group, route_node->lflow_ref, NULL,
+                              use_liveness_ports);
 
         /* If src or dst port is specified for selection_fields, install
          * separate ECMP flows with protocol match of TCP, UDP and SCTP */
         if (sset_contains(&group->selection_fields, "tp_src") ||
             sset_contains(&group->selection_fields, "tp_dst")) {
             build_ecmp_route_flow(lflows, od, group,
-                                  route_node->lflow_ref, "tcp");
+                                  route_node->lflow_ref, "tcp",
+                                  use_liveness_ports);
             build_ecmp_route_flow(lflows, od, group,
-                                  route_node->lflow_ref, "udp");
+                                  route_node->lflow_ref, "udp",
+                                  use_liveness_ports);
             build_ecmp_route_flow(lflows, od, group,
-                                  route_node->lflow_ref, "sctp");
+                                  route_node->lflow_ref, "sctp",
+                                  use_liveness_ports);
         }
     }
     const struct unique_routes_node *ur;
@@ -14873,7 +14917,9 @@ static void
 build_route_flows_for_lrouter(
         struct ovn_datapath *od, struct lflow_table *lflows,
         const struct group_ecmp_route_data *route_data,
-        struct simap *route_tables, const struct sset *bfd_ports)
+        struct simap *route_tables, const struct sset *bfd_ports,
+        const struct chassis_features *features,
+        const struct lr_stateful_table *lr_stateful_table)
 {
     ovs_assert(od->nbr);
     build_default_route_flows_for_lrouter(od, lflows, route_tables);
@@ -14883,7 +14929,8 @@ build_route_flows_for_lrouter(
     if (!datapath_node) {
         return;
     }
-    build_route_data_flows_for_lrouter(od, lflows, datapath_node, bfd_ports);
+    build_route_data_flows_for_lrouter(od, lflows, datapath_node, bfd_ports,
+                                       features, lr_stateful_table);
 }
 
 static void
@@ -19292,7 +19339,8 @@ build_lswitch_and_lrouter_iterate_by_lr(struct ovn_datapath *od,
                                            od->datapath_lflows);
     build_route_flows_for_lrouter(od, lsi->lflows,
                                   lsi->route_data, lsi->route_tables,
-                                  lsi->bfd_ports);
+                                  lsi->bfd_ports, lsi->features,
+                                  lsi->lr_stateful_table);
     build_mcast_lookup_flows_for_lrouter(od, lsi->lflows, &lsi->match,
                                          od->datapath_lflows);
     build_ingress_policy_flows_for_lrouter(od, lsi->lflows, lsi->lr_ports,
@@ -20278,6 +20326,28 @@ lflow_handle_lr_stateful_changes(struct ovsdb_idl_txn *ovnsb_txn,
                 if (!handled) {
                     goto exit;
                 }
+            }
+        }
+
+        /* Whether ECMP routes use liveness ports depends on the distributed
+         * NAT entries of the router, see ecmp_route_use_liveness_ports(). */
+        const struct group_ecmp_datapath *route_node =
+            group_ecmp_datapath_lookup(lflow_input->route_data, od);
+        if (lflow_input->features->select_liveness_port && route_node
+            && !hmap_is_empty(&route_node->ecmp_groups)) {
+            lflow_ref_unlink_lflows(route_node->lflow_ref);
+            build_route_data_flows_for_lrouter(
+                od, lflows, route_node, lflow_input->bfd_ports,
+                lflow_input->features, lflow_input->lr_stateful_table);
+
+            handled = lflow_ref_sync_lflows(
+                route_node->lflow_ref, lflows, ovnsb_txn,
+                lflow_input->dps,
+                lflow_input->ovn_internal_version_changed,
+                lflow_input->sbrec_logical_flow_table,
+                lflow_input->sbrec_logical_dp_group_table);
+            if (!handled) {
+                goto exit;
             }
         }
     }
