@@ -25,6 +25,9 @@ enum objdep_type {
     OBJDEP_TYPE_ADDRSET,
     OBJDEP_TYPE_PORTGROUP,
     OBJDEP_TYPE_PORTBINDING,
+    /* The chassis that a Port_Binding is bound to, whichever chassis it is.
+     * Changes when the port moves between any two chassis. */
+    OBJDEP_TYPE_PORT_CHASSIS,
     OBJDEP_TYPE_MC_GROUP,
     OBJDEP_TYPE_TEMPLATE,
     OBJDEP_TYPE_MAX,

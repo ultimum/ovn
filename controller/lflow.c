@@ -72,6 +72,7 @@ struct lookup_port_aux {
     const struct sbrec_datapath_binding *dp;
     const struct sbrec_logical_flow *lflow;
     struct objdep_mgr *deps_mgr;
+    const struct sbrec_chassis *chassis;
     const struct hmap *chassis_tunnels;
     const struct shash *local_bindings;
 };
@@ -192,6 +193,43 @@ tunnel_ofport_cb(const void *aux_, const char *port_name, ofp_port_t *ofport)
     if (!get_chassis_tunnel_ofport(aux->chassis_tunnels, pb->chassis->name,
                                    ofport)) {
         return false;
+    }
+
+    return true;
+}
+
+/* Given the OVN port name of a "select" member, get the tunnel to the chassis
+ * that the port is bound to.  See 'lookup_port_tunnel' in
+ * 'struct ovnact_encode_params'. */
+static bool
+lookup_port_tunnel_cb(const void *aux_, const char *port_name,
+                      ofp_port_t *ofport)
+{
+    const struct lookup_port_aux *aux = aux_;
+
+    /* Reprocess the logical flow whenever the port moves to another chassis,
+     * so that the member watches the tunnel to the new chassis. */
+    objdep_mgr_add(aux->deps_mgr, OBJDEP_TYPE_PORT_CHASSIS, port_name,
+                   &aux->lflow->header_.uuid);
+
+    *ofport = OFPP_NONE;
+
+    const struct sbrec_port_binding *pb
+        = lport_lookup_by_name(aux->sbrec_port_binding_by_name, port_name);
+    if (!pb || pb->datapath != aux->dp) {
+        /* Unknown port, keep the member as if it had no liveness port. */
+        return true;
+    }
+
+    if (!pb->chassis) {
+        return false;
+    }
+
+    if (pb->chassis != aux->chassis) {
+        /* Leaves '*ofport' unchanged if there is no tunnel to the chassis,
+         * e.g. with flow-based tunnels. */
+        get_chassis_tunnel_ofport(aux->chassis_tunnels, pb->chassis->name,
+                                  ofport);
     }
 
     return true;
@@ -880,6 +918,7 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
         .dp = ldp->datapath,
         .lflow = lflow,
         .deps_mgr = l_ctx_out->lflow_deps_mgr,
+        .chassis = l_ctx_in->chassis,
         .chassis_tunnels = l_ctx_in->chassis_tunnels,
         .local_bindings = l_ctx_in->lbinding_lports,
     };
@@ -898,6 +937,7 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
         .lookup_port = lookup_port_cb,
         .lookup_local_port = lookup_local_port_cb,
         .tunnel_ofport = tunnel_ofport_cb,
+        .lookup_port_tunnel = lookup_port_tunnel_cb,
         .aux = &aux,
         .is_switch = ldp->is_switch,
         .group_table = l_ctx_out->group_table,
@@ -2229,7 +2269,8 @@ lflow_handle_flows_for_lport(const struct sbrec_port_binding *pb,
     return true;
 }
 
-/* Handles port-binding add/deletions. */
+/* Handles port-binding add/deletions, and changes of the chassis of a
+ * port-binding for the logical flows that depend on it. */
 bool
 lflow_handle_changed_port_bindings(struct lflow_ctx_in *l_ctx_in,
                                    struct lflow_ctx_out *l_ctx_out)
@@ -2239,8 +2280,23 @@ lflow_handle_changed_port_bindings(struct lflow_ctx_in *l_ctx_in,
     const struct sbrec_port_binding *pb;
     SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (pb,
                                                l_ctx_in->port_binding_table) {
-        if (!sbrec_port_binding_is_new(pb)
-            && !sbrec_port_binding_is_deleted(pb)) {
+        bool added_or_deleted = sbrec_port_binding_is_new(pb)
+                                || sbrec_port_binding_is_deleted(pb);
+        if (!added_or_deleted
+            && !sbrec_port_binding_is_updated(
+                    pb, SBREC_PORT_BINDING_COL_CHASSIS)) {
+            continue;
+        }
+        if (!objdep_mgr_handle_change(l_ctx_out->lflow_deps_mgr,
+                                      OBJDEP_TYPE_PORT_CHASSIS,
+                                      pb->logical_port,
+                                      lflow_handle_changed_ref,
+                                      l_ctx_out->objs_processed,
+                                      l_ctx_in, l_ctx_out, &changed)) {
+            ret = false;
+            break;
+        }
+        if (!added_or_deleted) {
             continue;
         }
         if (!objdep_mgr_handle_change(l_ctx_out->lflow_deps_mgr,
