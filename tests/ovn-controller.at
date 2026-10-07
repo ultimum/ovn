@@ -629,6 +629,7 @@ check_row_count Chassis 1 name=hv1 other_config:ct-commit-to-zone="true"
 check_row_count Chassis 1 name=hv1 other_config:fdb-timestamp="true"
 check_row_count Chassis 1 name=hv1 other_config:ct-next-zone="true"
 check_row_count Chassis 1 name=hv1 other_config:ct-state-save="true"
+check_row_count Chassis 1 name=hv1 other_config:select-liveness-port="true"
 
 # Check the features reported by northd without features that are detected from ovs.
 AT_CHECK([as northd ovn-appctl -t ovn-northd debug/chassis-features-list | sort | \
@@ -640,6 +641,7 @@ ct_state_save: true
 fdb_timestamp: true
 ls_dpg_column: true
 mac_binding_timestamp: true
+select_liveness_port: true
 ])
 
 OVN_CLEANUP([hv1])

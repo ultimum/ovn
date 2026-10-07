@@ -523,6 +523,7 @@ northd_enable_all_features(struct ed_type_global_config *data)
         .ct_next_zone = true,
         .ct_label_flush = true,
         .ct_state_save = true,
+        .select_liveness_port = true,
     };
 }
 
@@ -619,6 +620,15 @@ build_chassis_features(const struct sbrec_chassis_table *sbrec_chassis_table,
         if (!ct_state_save &&
             chassis_features->ct_state_save) {
             chassis_features->ct_state_save = false;
+        }
+
+        bool select_liveness_port =
+                smap_get_bool(&chassis->other_config,
+                              OVN_FEATURE_SELECT_LIVENESS_PORT,
+                              false);
+        if (!select_liveness_port &&
+            chassis_features->select_liveness_port) {
+            chassis_features->select_liveness_port = false;
         }
     }
 }
@@ -770,6 +780,10 @@ chassis_features_changed(const struct chassis_features *present,
     }
 
     if (present->ls_dpg_column != updated->ls_dpg_column) {
+        return true;
+    }
+
+    if (present->select_liveness_port != updated->select_liveness_port) {
         return true;
     }
 
