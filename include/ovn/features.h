@@ -30,6 +30,7 @@
 #define OVN_FEATURE_CT_NEXT_ZONE "ct-next-zone"
 #define OVN_FEATURE_CT_LABEL_FLUSH "ct-label-flush"
 #define OVN_FEATURE_CT_STATE_SAVE "ct-state-save"
+#define OVN_FEATURE_SELECT_LIVENESS_PORT "select-liveness-port"
 
 /* DEPRACATED: The following features can be removed
  * after the next LTS version release. */

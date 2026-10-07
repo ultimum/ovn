@@ -23,6 +23,7 @@ struct chassis_features {
     bool ct_next_zone;
     bool ct_label_flush;
     bool ct_state_save;
+    bool select_liveness_port;
 };
 
 struct global_config_tracked_data {

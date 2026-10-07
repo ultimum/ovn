@@ -690,6 +690,8 @@ chassis_features_list(struct unixctl_conn *conn, int argc OVS_UNUSED,
                   features->ct_label_flush ? "true" : "false");
     ds_put_format(&ds, "ct_state_save: %s\n",
                   features->ct_state_save ? "true" : "false");
+    ds_put_format(&ds, "select_liveness_port: %s\n",
+                  features->select_liveness_port ? "true" : "false");
 
     unixctl_command_reply(conn, ds_cstr(&ds));
     ds_destroy(&ds);
