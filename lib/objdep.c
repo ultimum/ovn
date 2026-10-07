@@ -240,6 +240,7 @@ objdep_type_name(enum objdep_type type)
         [OBJDEP_TYPE_ADDRSET] = "Address_Set",
         [OBJDEP_TYPE_PORTGROUP] = "Port_Group",
         [OBJDEP_TYPE_PORTBINDING] = "Port_Binding",
+        [OBJDEP_TYPE_PORT_CHASSIS] = "Port_Binding chassis",
         [OBJDEP_TYPE_MC_GROUP] = "Multicast_Group",
         [OBJDEP_TYPE_TEMPLATE] = "Template",
     };
