@@ -1590,6 +1590,16 @@ ovnact_ct_lb_free(struct ovnact_ct_lb *ct_lb)
 }
 
 static void
+select_dsts_destroy(struct vector *dsts)
+{
+    struct ovnact_select_dst *dst;
+    VECTOR_FOR_EACH_PTR (dsts, dst) {
+        free(dst->port_name);
+    }
+    vector_destroy(dsts);
+}
+
+static void
 parse_select_action(struct action_context *ctx, struct expr_field *res_field)
 {
     /* Check if the result field is modifiable. */
@@ -1630,16 +1640,31 @@ parse_select_action(struct action_context *ctx, struct expr_field *res_field)
     }
 
     while (!lexer_match(ctx->lexer, LEX_T_RPAREN)) {
-        struct ovnact_select_dst dst;
+        struct ovnact_select_dst dst = { .port_name = NULL };
+
+        /* Optional "PORT": prefix, the member is only used while the chassis
+         * that PORT is bound to is reachable. */
+        if (ctx->lexer->token.type == LEX_T_STRING) {
+            dst.port_name = xstrdup(ctx->lexer->token.s);
+            lexer_get(ctx->lexer);
+            if (!lexer_force_match(ctx->lexer, LEX_T_COLON)) {
+                free(dst.port_name);
+                select_dsts_destroy(&dsts);
+                return;
+            }
+        }
+
         if (!action_parse_uint16(ctx, &dst.id, "id")) {
-            vector_destroy(&dsts);
+            free(dst.port_name);
+            select_dsts_destroy(&dsts);
             return;
         }
 
         dst.weight = 0;
         if (lexer_match(ctx->lexer, LEX_T_EQUALS)) {
             if (!action_parse_uint16(ctx, &dst.weight, "weight")) {
-                vector_destroy(&dsts);
+                free(dst.port_name);
+                select_dsts_destroy(&dsts);
                 return;
             }
             if (dst.weight == 0) {
@@ -1657,7 +1682,7 @@ parse_select_action(struct action_context *ctx, struct expr_field *res_field)
     }
     if (vector_len(&dsts) <= 1) {
         lexer_syntax_error(ctx->lexer, "expecting at least 2 group members");
-        vector_destroy(&dsts);
+        select_dsts_destroy(&dsts);
         return;
     }
 
@@ -1665,14 +1690,14 @@ parse_select_action(struct action_context *ctx, struct expr_field *res_field)
         lexer_force_match(ctx->lexer, LEX_T_SEMICOLON);
         if (!lexer_match_id(ctx->lexer, "hash_fields")) {
             lexer_syntax_error(ctx->lexer, "expecting hash_fields");
-            vector_destroy(&dsts);
+            select_dsts_destroy(&dsts);
             return;
         }
         if (!lexer_match(ctx->lexer, LEX_T_EQUALS) ||
             ctx->lexer->token.type != LEX_T_STRING ||
             lexer_lookahead(ctx->lexer) != LEX_T_RPAREN) {
             lexer_syntax_error(ctx->lexer, "invalid hash_fields");
-            vector_destroy(&dsts);
+            select_dsts_destroy(&dsts);
             return;
         }
         hash_fields = xstrdup(ctx->lexer->token.s);
@@ -1704,6 +1729,9 @@ format_SELECT(const struct ovnact_select *select, struct ds *s)
         }
 
         const struct ovnact_select_dst *dst = &select->dsts[i];
+        if (dst->port_name) {
+            ds_put_format(s, "\"%s\":", dst->port_name);
+        }
         ds_put_format(s, "%"PRIu16, dst->id);
         ds_put_format(s, "=%"PRIu16, dst->weight);
     }
@@ -1742,8 +1770,25 @@ encode_SELECT(const struct ovnact_select *select,
 
     for (size_t bucket_id = 0; bucket_id < select->n_dsts; bucket_id++) {
         const struct ovnact_select_dst *dst = &select->dsts[bucket_id];
-        ds_put_format(&ds, ",bucket=bucket_id=%"PRIuSIZE",weight:%"PRIu16
-                      ",actions=", bucket_id, dst->weight);
+        ofp_port_t watch_port = OFPP_NONE;
+
+        if (dst->port_name && ep->lookup_port_tunnel
+            && !ep->lookup_port_tunnel(ep->aux, dst->port_name,
+                                       &watch_port)) {
+            /* The port is bound to no chassis, nothing can be sent there. */
+            continue;
+        }
+
+        ds_put_format(&ds, ",bucket=bucket_id=%"PRIuSIZE",weight:%"PRIu16,
+                      bucket_id, dst->weight);
+        if (watch_port != OFPP_NONE) {
+            /* OVS skips the bucket while the tunnel is not alive, i.e. while
+             * BFD on the tunnel is enabled and not up.  With dp_hash only the
+             * flows hashed to this bucket move to other buckets. */
+            ds_put_format(&ds, ",watch_port:%"PRIu16,
+                          ofp_to_u16(watch_port));
+        }
+        ds_put_cstr(&ds, ",actions=");
         ds_put_format(&ds, "load:%u->%s[%u..%u],", dst->id, sf.field->name,
                       sf.ofs, sf.ofs + sf.n_bits - 1);
         ds_put_format(&ds, "resubmit(,%d)", resubmit_table);
@@ -1764,6 +1809,9 @@ encode_SELECT(const struct ovnact_select *select,
 static void
 ovnact_select_free(struct ovnact_select *select)
 {
+    for (size_t i = 0; i < select->n_dsts; i++) {
+        free(select->dsts[i].port_name);
+    }
     free(select->dsts);
     free(select->hash_fields);
 }

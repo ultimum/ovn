@@ -347,6 +347,8 @@ struct ovnact_ct_lb {
 struct ovnact_select_dst {
     uint16_t id;
     uint16_t weight;
+    char *port_name;            /* Logical port whose chassis decides the
+                                 * liveness of this member, or NULL. */
 };
 
 /* OVNACT_SELECT. */
@@ -907,6 +909,17 @@ struct ovnact_encode_params {
      * otherwise, returns false. */
     bool (*tunnel_ofport)(const void *aux, const char *port_name,
                           ofp_port_t *ofport);
+
+    /* Looks up the chassis that logical port 'port_name' is bound to, for a
+     * "select" member that can only be used while that chassis is reachable.
+     * Returns false if the port is bound to no chassis, in which case the
+     * member is left out.  Otherwise returns true and stores in '*ofport' the
+     * OpenFlow port of the tunnel to that chassis, whose liveness then
+     * decides whether the member can be selected, or OFPP_NONE if there is
+     * no such tunnel to watch, e.g. because the port is bound to this
+     * chassis.  May be NULL, then members are always used. */
+    bool (*lookup_port_tunnel)(const void *aux, const char *port_name,
+                               ofp_port_t *ofport);
 
     const void *aux;
 

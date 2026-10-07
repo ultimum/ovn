@@ -2407,6 +2407,34 @@ ct_lb_mark_local(backends="lsp1":[[fd0f::2]]:80);
     uses group: id(29), name(type=select,selection_method=dp_hash,bucket=bucket_id=0,weight:100,actions=ct(nat(dst=[[fd0f::2]]:80),commit,table=oflow_in_table,zone=NXM_NX_REG13[[0..15]],exec(set_field:2/2->ct_mark)))
     has prereqs ip
 
+# select with liveness ports
+reg9[[16..31]] = select("lsp1":1=50, "LOCAL":2, 3);
+    formats as reg9[[16..31]] = select("lsp1":1=50, "LOCAL":2=100, 3=100);
+    encodes as group:30
+    uses group: id(30), name(type=select,selection_method=dp_hash,bucket=bucket_id=0,weight:50,watch_port:17,actions=load:1->xreg4[[16..31]],resubmit(,oflow_in_table),bucket=bucket_id=1,weight:100,actions=load:2->xreg4[[16..31]],resubmit(,oflow_in_table),bucket=bucket_id=2,weight:100,actions=load:3->xreg4[[16..31]],resubmit(,oflow_in_table))
+
+reg0 = select("lsp1":1, "xyzzy":2, "eth0":3);
+    formats as reg0 = select("lsp1":1=100, "xyzzy":2=100, "eth0":3=100);
+    encodes as group:31
+    uses group: id(31), name(type=select,selection_method=dp_hash,bucket=bucket_id=0,weight:100,watch_port:17,actions=load:1->xxreg0[[96..127]],resubmit(,oflow_in_table),bucket=bucket_id=2,weight:100,watch_port:5,actions=load:3->xxreg0[[96..127]],resubmit(,oflow_in_table))
+
+reg9[[16..31]] = select(values=("lsp1":1, "eth1":2); hash_fields="ip_src,ip_dst");
+    formats as reg9[[16..31]] = select(values=("lsp1":1=100, "eth1":2=100); hash_fields="ip_src,ip_dst");
+    encodes as group:32
+    uses group: id(32), name(type=select,selection_method=hash,fields(ip_src,ip_dst),bucket=bucket_id=0,weight:100,watch_port:17,actions=load:1->xreg4[[16..31]],resubmit(,oflow_in_table),bucket=bucket_id=1,weight:100,watch_port:6,actions=load:2->xreg4[[16..31]],resubmit(,oflow_in_table))
+
+reg0 = select("xyzzy":1, "foo":2);
+    formats as reg0 = select("xyzzy":1=100, "foo":2=100);
+    encodes as group:33
+    uses group: id(33), name(type=select,selection_method=dp_hash)
+
+reg0 = select("lsp1" 1, 2);
+    Syntax error at `1' expecting `:'.
+reg0 = select(lsp1:1, 2);
+    Syntax error at `lsp1' expecting id.
+reg0 = select("lsp1":, 2);
+    Syntax error at `,' expecting id.
+
 # Miscellaneous negative tests.
 ;
     Syntax error at `;'.
