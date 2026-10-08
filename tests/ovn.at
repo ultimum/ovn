@@ -12386,6 +12386,64 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([BFD - stale status of a new session without peer])
+AT_KEYWORDS([bfd])
+ovn_start
+
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+
+check ovn-nbctl lr-add R1 \
+    -- lrp-add R1 rp-public 00:00:02:01:02:03 172.16.1.1/24 \
+    -- lrp-set-gateway-chassis rp-public hv1 \
+    -- ls-add public \
+    -- lsp-add-router-port public public-rp rp-public \
+    -- lsp-add-localnet-port public ln-public phys
+# Nobody answers on 172.16.1.50.
+check ovn-nbctl --bfd lr-route-add R1 100.0.0.0/8 172.16.1.50 rp-public
+bfd=$(fetch_column nb:bfd _uuid logical_port=rp-public)
+check ovn-nbctl set bfd $bfd min_rx=100 min_tx=100 detect_mult=3
+check ovn-nbctl --wait=hv sync
+wait_column down bfd status logical_port=rp-public
+# With SB RBAC, a chassis may only update a BFD row whose chassis_name is its
+# own name, which ovn-northd does not set for distributed gateway ports.
+check ovn-sbctl set bfd $(fetch_column bfd _uuid logical_port=rp-public) \
+    chassis_name=hv1
+
+# The status says "up", as left by an earlier session, for example on a
+# gateway chassis that died.  A new session starts down without writing it.
+OVN_CONTROLLER_EXIT([hv1], [--restart])
+check ovn-sbctl set bfd $(fetch_column bfd _uuid logical_port=rp-public) \
+    status=up
+wait_column up nb:bfd status logical_port=rp-public
+as hv1 start_daemon ovn-controller
+
+# The new session receives no packet within the detection time, so the
+# stale status is corrected.
+wait_column down bfd status logical_port=rp-public
+wait_column down nb:bfd status logical_port=rp-public
+OVS_WAIT_UNTIL([grep -q "BFD session to 172.16.1.50 received no packet" \
+                hv1/ovn-controller.log])
+
+# A status that is already "down" is left alone.
+n=$(grep -c "BFD session to 172.16.1.50 received no packet" \
+    hv1/ovn-controller.log)
+OVN_CONTROLLER_EXIT([hv1], [--restart])
+as hv1 start_daemon ovn-controller
+check ovn-nbctl --wait=hv sync
+sleep 1
+AT_CHECK([test $(grep -c "BFD session to 172.16.1.50 received no packet" \
+                 hv1/ovn-controller.log) = $n])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([4 HV, 1 LS, 1 LR, packet test with HA distributed router gateway port])
 ovn_start
 

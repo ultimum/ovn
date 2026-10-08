@@ -7351,6 +7351,12 @@ struct bfd_entry {
     enum bfd_state state;
     bool change_state;
 
+    /* A new session starts down without writing it to the Southbound
+     * database, where the status may still be "up" or "init" from an
+     * earlier session.  If no packet is received by this time, the status
+     * is written as "down".  0 if not pending. */
+    long long int stale_status_deadline;
+
     uint32_t detection_timeout;
     long long int last_rx;
     long long int next_tx;
@@ -7532,10 +7538,39 @@ update:
 }
 
 static void
+bfd_check_stale_status(struct bfd_entry *entry)
+{
+    if (entry->state != BFD_STATE_DOWN || !entry->stale_status_deadline) {
+        return;
+    }
+
+    long long int cur_time = time_msec();
+    if (cur_time < entry->stale_status_deadline) {
+        return;
+    }
+
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+    char ip[INET6_ADDRSTRLEN];
+    ipv6_string_mapped(ip, &entry->ip_dst);
+    VLOG_INFO_RL(&rl, "BFD session to %s received no packet since it "
+                 "started, setting its status to down", ip);
+
+    entry->stale_status_deadline = 0;
+    entry->change_state = true;
+    bfd_last_update = cur_time;
+    bfd_pending_update = 0;
+    notify_pinctrl_main();
+}
+
+static void
 bfd_check_detection_timeout(struct bfd_entry *entry)
 {
-    if (entry->state == BFD_STATE_ADMIN_DOWN ||
-        entry->state == BFD_STATE_DOWN) {
+    if (entry->state == BFD_STATE_DOWN) {
+        bfd_check_stale_status(entry);
+        return;
+    }
+
+    if (entry->state == BFD_STATE_ADMIN_DOWN) {
         return;
     }
 
@@ -7700,6 +7735,9 @@ pinctrl_handle_bfd_msg(struct rconn *swconn, const struct flow *ip_flow,
         free(ip_src);
         return;
     }
+
+    /* The peer answers, the state machine takes care of the status. */
+    entry->stale_status_deadline = 0;
 
     bool change_state = false;
     entry->remote_disc = get_16aligned_be32(&msg->my_disc);
@@ -7925,12 +7963,23 @@ bfd_monitor_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                    entry->state != BFD_STATE_ADMIN_DOWN) {
             entry->state = BFD_STATE_ADMIN_DOWN;
             entry->change_state = false;
+            entry->stale_status_deadline = 0;
             entry->remote_disc = 0;
         } else if (strcmp(bt->status, "admin_down") &&
                    entry->state == BFD_STATE_ADMIN_DOWN) {
             entry->state = BFD_STATE_DOWN;
             entry->change_state = false;
             entry->remote_disc = 0;
+            /* The status may be right, e.g. after a restart of
+             * ovn-controller, so do not write "down" right away.  But if
+             * it says that the session is up and the peer does not answer,
+             * nothing would ever correct it: write "down" once the
+             * detection time passes without any packet. */
+            if (strcmp(bt->status, "down")) {
+                long long int detection_time = bt->detect_mult * bt->min_rx;
+                entry->stale_status_deadline =
+                    cur_time + (detection_time > 0 ? detection_time : 5000);
+            }
             changed = true;
         } else if (entry->change_state && ovnsb_idl_txn) {
             if (entry->state == BFD_STATE_DOWN) {
