@@ -1,0 +1,46 @@
+Tests: kmod
+Depends:
+ @,
+ conntrack,
+ curl,
+ ethtool,
+ gawk,
+ iputils-ping,
+ net-tools,
+ ncat,
+ python3-pyftpdlib,
+ python3-scapy,
+ tcpdump,
+ wget,
+Restrictions:
+ allow-stderr,
+ build-needed,
+ isolation-machine,
+ needs-root,
+ rw-build-tree,
+
+# The dpdk tests are marked `skippable`, because they have environment specific
+# requirements which may or may not be available at runtime (hugepages setup).
+Tests: dpdk
+Depends:
+ @,
+ conntrack,
+ curl,
+ dpdk-dev [amd64 ppc64el arm64 riscv64],
+ ethtool,
+ gawk,
+ iputils-ping,
+ net-tools,
+ ncat,
+ openvswitch-switch-dpdk [amd64 ppc64el arm64 riscv64],
+ python3-pyftpdlib,
+ python3-scapy,
+ tcpdump,
+ wget,
+Restrictions:
+ allow-stderr,
+ build-needed,
+ isolation-machine,
+ needs-root,
+ rw-build-tree,
+ skippable,

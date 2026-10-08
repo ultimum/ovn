@@ -1,1 +1,3 @@
 usr/bin/ovn-controller
+usr/bin/ovn-br-controller
+usr/share/ovn/ovn-br.ovsschema

@@ -1,0 +1,32 @@
+Bug-Ubuntu: https://launchpad.net/bugs/2066194
+Last-Update: 2025-09-09
+
+From 64b310cc8694db98f711565979791e52e18c4c17 Mon Sep 17 00:00:00 2001
+From: Frode Nordahl <fnordahl@ubuntu.com>
+Date: Mon, 20 May 2024 20:31:29 +0200
+Subject: [PATCH] tests: Ignore ovs-vswitchd received packet on unknown port.
+
+The ovs-vswitchd daemon may in some situations, typically during
+teardown, log a warning level message 'received packet on unknown
+port ...'.
+
+Ignore this message.
+
+Reported-at: https://launchpad.net/bugs/2066194
+Signed-off-by: Frode Nordahl <fnordahl@ubuntu.com>
+---
+ tests/ovn-macros.at | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/tests/ovn-macros.at b/tests/ovn-macros.at
+index f41edbb166..6d0d74d2e5 100644
+--- a/tests/ovn-macros.at
++++ b/tests/ovn-macros.at
+@@ -414,6 +414,7 @@ m4_define([OVN_CLEANUP_SBOX],[
+         /Failed to locate tunnel to reach main chassis/d
+         /Transaction causes multiple rows.*MAC_Binding/d
+         /Transaction causes multiple rows.*FDB/d
++        /received packet on unknown port/d
+     " $sbox])
+ ])
+ 

@@ -1,0 +1,10 @@
+send gratuitous arp on localnet
+1 LR with distributed router gateway port
+router - check packet length - icmp defrag
+multi-vtep SB Chassis encap updates
+ACL with Port Group conjunction flow efficiency
+ipsec -- basic configuration
+ovn-controller incremental processing
+virtual port claim race condition
+IP packet buffering -- parallelization=yes -- ovn_monitor_all=yes
+IP packet buffering -- parallelization=yes -- ovn_monitor_all=no

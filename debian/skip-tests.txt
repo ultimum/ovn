@@ -1,0 +1,12 @@
+# LP: #2002406 New test, and it's flaky
+Check NB-SB mirrors sync
+# LP: #2002475
+recomputes
+# LP: #2002476
+policy-based routing IPv6: 1 HVs, 3 LSs, 1 lport/LS, 1 LR
+# LP: #2002477
+feature inactivity probe
+# LP: #2007923
+check meters update
+# LP: #2057784
+ovn-controller - check sbdb connection

@@ -1,0 +1,20 @@
+[Unit]
+Description=OVN Bridge controller daemon
+After=network.target openvswitch-switch.service ovn-ovsdb-server-br.service
+DefaultDependencies=no
+
+[Service]
+Type=forking
+EnvironmentFile=-/etc/default/ovn-host
+ConfigurationDirectory=ovn
+StateDirectory=ovn
+LogsDirectory=ovn
+PIDFile=%t/ovn/ovn-br-controller.pid
+ExecStart=/usr/share/ovn/scripts/ovn-ctl start_ovnbr_controller --ovn-manage-ovsdb=no --no-monitor $OVNBR_CTL_OPTS
+ExecStop=/usr/share/ovn/scripts/ovn-ctl stop_ovnbr_controller --no-monitor
+Restart=on-failure
+LimitNOFILE=65535
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

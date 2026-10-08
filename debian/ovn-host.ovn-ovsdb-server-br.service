@@ -1,0 +1,20 @@
+[Unit]
+Description=Open vSwitch database server for OVN Bridge database
+After=network.target
+DefaultDependencies=no
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/ovn-host
+ConfigurationDirectory=ovn
+StateDirectory=ovn
+LogsDirectory=ovn
+PIDFile=%t/ovn/ovnbr_db.pid
+ExecStart=/usr/share/ovn/scripts/ovn-ctl run_ovnbr_ovsdb $OVNBR_CTL_OPTS
+ExecStop=/usr/share/ovn/scripts/ovn-ctl stop_ovnbr_ovsdb
+Restart=on-failure
+LimitNOFILE=65535
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

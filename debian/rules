@@ -1,19 +1,10 @@
 #!/usr/bin/make -f
 # -*- makefile -*-
-# Sample debian/rules that uses debhelper.
-#
-# This file was originally written by Joey Hess and Craig Small.
-# As a special exception, when this file is copied by dh-make into a
-# dh-make output file, you may use that output file without restriction.
-# This special exception was added by Craig Small in version 0.37 of dh-make.
-#
-# Modified to make a template file for a multi-binary package with separated
-# build-arch and build-indep targets  by Bill Allombert 2001
 #export DH_VERBOSE=1
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
-PACKAGE=openvswitch
-PACKAGE_DKMS=openvswitch-datapath-dkms
-include /usr/share/dpkg/pkg-info.mk
+%:
+	dh $@ --with autoreconf,python3,sphinxdoc
 
 ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
 PARALLEL = -j$(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
@@ -21,52 +12,139 @@ else
 PARALLEL =
 endif
 
-%:
-	dh $@ --with autoreconf,python3 --parallel
-
-# use --as-needed only if supported by dh-autoreconf (to simplify backporting)
-DH_AS_NEEDED=$(shell dpkg --compare-versions $$(dpkg --status dh-autoreconf | grep Version | cut -d' ' -f2) ge 6 && echo --as-needed)
-override_dh_autoreconf:
-	dh_autoreconf $(DH_AS_NEEDED)
-
 override_dh_auto_configure:
-	dh_auto_configure -- --enable-ssl --enable-shared --with-ovs-source=${OVSDIR} $(EXTRA_CONFIGURE_OPTS)
+	# Configure OVS before OVN
+	test -f $(CURDIR)/ovs/configure || \
+		rm -rf $(CURDIR)/ovs && \
+		cp -R /usr/src/openvswitch $(CURDIR)/ovs
+	cd ovs && autoreconf -f -i -v && ./configure --enable-ssl --localstatedir=/var --sysconfdir=/etc --prefix=/usr && make $(PARALLEL)
+	# Configure OVN to allow building OVN VIF
+	./boot.sh && ./configure \
+		--prefix=/usr \
+		--localstatedir=/var \
+		--sysconfdir=/etc \
+		--with-dbdir=/var/lib/ovn \
+		--with-ovs-source=$(CURDIR)/ovs \
+		--enable-ssl
+	# Configure and build OVN VIF
+	cd ovn-vif && \
+		./boot.sh && \
+		./configure \
+			--with-ovs-source=$(CURDIR)/ovs \
+			--with-ovn-source=$(CURDIR) \
+			--enable-plug-representor && \
+		make $(PARALLEL)
+	# Use dh_auto_configure to build OVN
+	dh_auto_configure -- \
+		--prefix=/usr \
+		--localstatedir=/var \
+		--sysconfdir=/etc \
+		--with-dbdir=/var/lib/ovn \
+		--with-ovs-source=$(CURDIR)/ovs \
+		--enable-ssl \
+		--with-vif-plug-provider=$(CURDIR)/ovn-vif
+
+TEST_LIST = $(shell \
+	        cat $(CURDIR)/debian/skip-tests.txt \
+                    $(CURDIR)/debian/flaky-tests-$(DEB_HOST_ARCH).txt | \
+                $(CURDIR)/debian/testlist.py - $(CURDIR)/tests/testsuite)
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	if $(MAKE) check TESTSUITEFLAGS='$(PARALLEL)' RECHECK=yes; then :; \
+	if $(MAKE) check TESTSUITEFLAGS='$(PARALLEL) $(TEST_LIST)' \
+		             RECHECK=yes SKIP_UNSTABLE=yes; then :; \
 	else \
 		cat tests/testsuite.log; \
 		exit 1; \
 	fi
-endif
+endif # nocheck
 
 override_dh_auto_build:
-	dh_auto_build -- dist distdir=ovn
+	cd ovs && $(MAKE) $(PARALLEL)
+	$(MAKE) $(PARALLEL)
 
 override_dh_auto_clean:
 	dh_auto_clean
+	cd ovn-vif && make distclean | :
+	rm -rf ovs
+	rm -rf ovn-vif/Documentation/_build
+	rm -rf ovn-vif/build-aux/compile
+	set -e ; set -x ; for i in config.guess config.sub depcomp install-sh ltmain.sh missing ; do rm rm -rf ovn-vif/build-aux/$$i ; done
+	rm -f ovn-vif/config.status ovn-vif/configure ovn-vif/docs-check ovn-vif/lib/.dirstamp
+	rm -rf ovn-vif/lib/.libs
+	rm -f ovn-vif/lib/*.o
+	rm -f ovn-vif/lib/vif-plug-providers/representor/.dirstamp  ovn-vif/lib/vif-plug-providers/representor/tests_ovstest-vif-plug-representor.o ovn-vif/lib/vif-plug-providers/representor/vif-plug-representor.o \
+		ovn-vif/tests/.dirstamp ovn-vif/tests/ovstest
+	rm -f ovn-vif/tests/*.o
+	rm -f ovn-vif/tests/system-kmod-testsuite
+	rm -f ovn-vif/utilities/devlink ovn-vif/utilities/devlink.o
+	rm -f tests/perf-testsuite tests/system-kmod-testsuite tests/system-userspace-testsuite tests/testsuite
+	rm -f ovn-vif/libtool ovn-vif/tests/testsuite ovn-vif/utilities/.dirstamp package.m4 rhel/ovn-fedora.spec
 
-override_dh_install-arch:
-	dh_install
+	rm -rf utilities/.deps \
+		tests/.deps \
+		br-controller/.deps \
+		controller-vtep/.deps \
+		controller/.deps \
+		ic/.deps \
+		lib/.deps \
+		lib/vif-plug-providers/dummy/.deps \
+		northd/.deps \
+		ovn-vif/lib/.deps \
+		ovn-vif/lib/vif-plug-providers/representor/.deps \
+		ovn-vif/tests/.deps \
+		ovn-vif/tests/.libs \
+		ovn-vif/utilities/.deps \
+		ovn-vif/utilities/.libs \
+		include/openflow \
+		ipsec \
+		tests/system-dpdk-testsuite \
+		tests/multinode-testsuite
 
-	# ovn-host
-	cp debian/ovn-host.template debian/ovn-host/usr/share/ovn/host/default.template
+	mkdir -p ovs
 
-	# ovn-central
-	cp debian/ovn-central.template debian/ovn-central/usr/share/ovn/central/default.template
+	set -e ; set -x ; for i in Makefile Makefile.in aclocal.m4 config.h config.h.in config.log distfiles include/ovn-vif/version.h lib/libovn-vif.la lib/libovn-vif.sym lib/netlink-devlink.lo lib/ovn-vif.lo lib/vif-plug-providers/representor/vif-plug-representor.lo libtool m4/libtool.m4 m4/ltoptions.m4 m4/ltsugar.m4 m4/ltversion.m4 m4/lt~obsolete.m4 package.m4 stamp-h1 tests/atconfig tests/atlocal tests/testsuite ; do \
+		rm -f ovn-vif/$$i ; \
+	done
 
-override_dh_install-indep:
-	dh_install
-
+execute_after_dh_auto_install:
+	rm -f $(CURDIR)/debian/tmp/usr/bin/ovn-detrace
+	mv $(CURDIR)/debian/tmp/usr/bin/ovn_detrace.py \
+		$(CURDIR)/debian/tmp/usr/bin/ovn-detrace
 
 override_dh_installinit:
-	dh_installinit -R
+	# Package does not ship any init.d files
+	dh_installinit --no-scripts
 
-override_dh_strip:
-	dh_strip
+override_dh_installsystemd:
+	dh_installsystemd --restart-after-upgrade -povn-central --name=ovn-northd
+	dh_installsystemd --restart-after-upgrade -povn-central --name=ovn-ovsdb-server-sb
+	dh_installsystemd --restart-after-upgrade -povn-central --name=ovn-ovsdb-server-nb
+	dh_installsystemd --restart-after-upgrade -povn-ic-db   --name=ovn-ovsdb-server-ic-sb
+	dh_installsystemd --restart-after-upgrade -povn-ic-db   --name=ovn-ovsdb-server-ic-nb
+	dh_installsystemd --restart-after-upgrade -povn-host    --name=ovn-controller
+	dh_installsystemd --restart-after-upgrade -povn-host    --name=ovn-ovsdb-server-br    --no-start --no-enable
+	dh_installsystemd --restart-after-upgrade -povn-host    --name=ovn-br-controller      --no-start --no-enable
+	dh_installsystemd --restart-after-upgrade
 
-override_dh_usrlocal:
+override_dh_python3:
+	dh_python3 --shebang=/usr/bin/python3
 
-override_dh_installman:
-	dh_installman --language=C
+# Helper target for creating snapshots from upstream git
+DATE=$(shell date +%Y%m%d)
+# Upstream branch to track
+BRANCH=main
+VERSION=26.03.0
+
+get-orig-snapshot:
+	rm -Rf ovn-upstream ovn-vif-upstream
+	git clone --branch $(BRANCH) --depth 1 https://github.com/ovn-org/ovn ovn-upstream
+	git clone --branch $(BRANCH) --depth 1 https://github.com/ovn-org/ovn-vif ovn-vif-upstream
+	cd ovn-upstream && \
+		export COMMIT=`git rev-parse --short HEAD` && \
+		git archive --format tgz --prefix=ovn-$(VERSION)~git$(DATE).$$COMMIT/ \
+			-o ../../ovn_$(VERSION)~git$(DATE).$$COMMIT.orig.tar.gz $(BRANCH) && \
+		cd ../ovn-vif-upstream && \
+		git archive --format tgz --prefix=ovn-vif-$(VERSION)~git$(DATE).$$COMMIT/ \
+			-o ../../ovn_$(VERSION)~git$(DATE).$$COMMIT.orig-ovn-vif.tar.gz $(BRANCH)
+	rm -Rf ovn-upstream ovn-vif-upstream

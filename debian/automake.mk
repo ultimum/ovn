@@ -1,32 +1,44 @@
 EXTRA_DIST += \
 	debian/changelog \
-	debian/compat \
 	debian/control \
-	debian/copyright.in \
-	debian/dirs \
-	debian/ovn-central.dirs \
-	debian/ovn-central.init \
+	debian/copyright \
+	debian/flaky-tests-amd64.txt \
+	debian/flaky-tests-arm64.txt \
+	debian/flaky-tests-armel.txt \
+	debian/flaky-tests-armhf.txt \
+	debian/flaky-tests-i386.txt \
+	debian/flaky-tests-mips64el.txt \
+	debian/flaky-tests-mipsel.txt \
+	debian/flaky-tests-ppc64el.txt \
+	debian/flaky-tests-riscv64.txt \
+	debian/flaky-tests-s390x.txt \
+	debian/gbp.conf \
+	debian/not-installed \
+	debian/ovn-central.default \
 	debian/ovn-central.install \
-	debian/ovn-central.manpages \
-	debian/ovn-central.postinst \
-	debian/ovn-central.postrm \
-	debian/ovn-central.template \
-	debian/ovn-controller-vtep.init \
-	debian/ovn-controller-vtep.install \
-	debian/ovn-controller-vtep.manpages \
+	debian/ovn-central.ovn-northd.service \
+	debian/ovn-central.service \
+	debian/ovn-common.docs \
 	debian/ovn-common.install \
-	debian/ovn-common.manpages \
-	debian/ovn-common.postinst \
-	debian/ovn-common.postrm \
-	debian/ovn-host.dirs \
-	debian/ovn-host.init \
+	debian/ovn-common.logrotate \
+	debian/ovn-controller-vtep.install \
+	debian/ovn-controller-vtep.service \
+	debian/ovn-doc.doc-base \
+	debian/ovn-doc.install \
+	debian/ovn-docker.install \
+	debian/ovn-host.default \
 	debian/ovn-host.install \
-	debian/ovn-host.manpages \
-	debian/ovn-host.postinst \
-	debian/ovn-host.postrm \
-	debian/ovn-host.template \
+	debian/ovn-host.ovn-controller.service \
+	debian/ovn-host.service \
+	debian/ovn-ic-db.install \
+	debian/ovn-ic-db.service \
+	debian/ovn-ic.install \
+	debian/ovn-ic.service \
 	debian/rules \
-	debian/source/format
+	debian/source/format \
+	debian/source/include-binaries \
+	debian/testlist.py \
+	debian/watch
 
 check-debian-changelog-version:
 	@DEB_VERSION=`echo '$(VERSION)' | sed 's/pre/~pre/'`;		     \
@@ -39,13 +51,3 @@ check-debian-changelog-version:
 	fi
 ALL_LOCAL += check-debian-changelog-version
 DIST_HOOKS += check-debian-changelog-version
-
-$(srcdir)/debian/copyright: AUTHORS.rst debian/copyright.in
-	$(AM_V_GEN) \
-	{ sed -n -e '/%AUTHORS%/q' -e p < $(srcdir)/debian/copyright.in;   \
-	  sed '34,/^$$/d' $(srcdir)/AUTHORS.rst |			   \
-		sed -n -e '/^$$/q' -e 's/^/  /p';			   \
-	  sed -e '34,/%AUTHORS%/d' $(srcdir)/debian/copyright.in;	   \
-	} > $@
-
-CLEANFILES += debian/copyright
