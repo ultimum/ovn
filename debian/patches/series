@@ -1,1 +1,3 @@
 lp-2066194-tests-Ignore-ovs-vswitchd-received-packet-on-unknown.patch
+0001-ultimum-northd-scope-bfd-route-flows-to-logical-inport.patch
+0002-ultimum-tests-make-localnet-loopback-igmp-scapy-2.8-safe.patch

@@ -1,3 +1,12 @@
+ovn (26.03.3-2~cloud0+ultimum1) noble-gazpacho; urgency=medium
+
+  * Backport upstream commit 96e3417a8 to scope BFD route flows to their
+    logical inport.
+  * Backport upstream commit 6c6021599 to make the localnet loopback IGMP
+    report test work with Scapy 2.8.
+
+ -- Michal Arbet <michal.arbet@ultimum.io>  Thu, 08 Oct 2026 21:04:58 +0200
+
 ovn (26.03.3-2~cloud0) noble-gazpacho; urgency=medium
 
   * Update to upstream OVN 26.03.3.
