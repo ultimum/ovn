@@ -1,3 +1,12 @@
+ovn (26.03.3-2~cloud0) noble-gazpacho; urgency=medium
+
+  * Update to upstream OVN 26.03.3.
+  * Import Ubuntu Cloud Archive packaging from 26.03.0-2~cloud0, including
+    the LP #2066194 test patch.
+  * Set the git-buildpackage Debian branch to packaging-ultimum-26.03.
+
+ -- Michal Arbet <michal.arbet@ultimum.io>  Thu, 08 Oct 2026 19:57:09 +0200
+
 ovn (26.03.0-2~cloud0) noble-gazpacho; urgency=medium
 
   * New update for the Ubuntu Cloud Archive.
